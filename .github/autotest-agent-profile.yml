@@ -1,0 +1,40 @@
+apiVersion: v1beta1
+kind: RepositoryAgentProfile
+routes:
+  - id: source-fix
+    default: true
+    match:
+      issueLabel: agent:source-fix
+      defaultMode: bug-fix
+      allowedModes:
+        - bug-fix
+    policy:
+      instructionPaths:
+        - CONTRIBUTING.md
+      maxRepairAttempts: 2
+    capability:
+      name: vscode-gradle-source-fix
+      settings:
+        writeGlobs:
+          - gradle-language-server/**
+        planGlobs:
+          - gradle-language-server/src/test/**/*.java
+        workflow:
+          name: Build & Publish
+          path: .github/workflows/main.yml
+          plansInput: scope
+          requiredPlatforms:
+            - linux
+            - windows
+          artifactNameTemplate: source-fix-{platform}-{plan}
+        requiredPullRequestWorkflows:
+          - .github/workflows/main.yml
+  - id: triage
+    match:
+      issueLabel: agent:triage
+      defaultMode: triage
+      allowedModes:
+        - triage
+    capability:
+      name: repository-issue-triage
+      settings: {}
