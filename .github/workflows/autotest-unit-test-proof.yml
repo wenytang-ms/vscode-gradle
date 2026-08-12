@@ -100,40 +100,28 @@ jobs:
               root = ET.parse(report).getroot()
               for case in root.iter("testcase"):
                   parsed_tests += 1
+                  case_name = case.attrib.get("name", "").removesuffix("()")
                   if (
                       case.attrib.get("classname") == class_name
-                      and case.attrib.get("name", "").removesuffix("()")
-                      == method_name
+                      and (
+                          case_name == method_name
+                          or case_name.startswith(f"{method_name}(")
+                      )
                   ):
                       matching.append(case)
 
           if len(matching) == 1:
               failure = matching[0].find("failure")
-              failure_text = " ".join(
-                  (
-                      failure.attrib.get("type", ""),
-                      failure.attrib.get("message", ""),
-                      failure.text or "",
-                  )
-              ).casefold() if failure is not None else ""
-              failed = failure is not None and (
-                  "assert" in failure_text
-                  or "opentest4j" in failure_text
-              )
+              error = matching[0].find("error")
+              failed = failure is not None or error is not None
               classification = (
                   "expected_failure"
                   if failed
-                  else (
-                      "test_passed"
-                      if failure is None
-                      and matching[0].find("error") is None
-                      else "unrelated_failure"
-                  )
+                  else "test_passed"
               )
               test_outcome = (
                   "failed"
-                  if failure is not None
-                  or matching[0].find("error") is not None
+                  if failed
                   else "passed"
               )
           elif reports and parsed_tests:
