@@ -68,6 +68,7 @@ jobs:
           set +e
           ./gradlew gradle-language-server:test \
             --tests "$TEST_SELECTOR" \
+            -x spotlessJavaCheck \
             --no-daemon
           exit_code=$?
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
