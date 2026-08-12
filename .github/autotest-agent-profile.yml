@@ -19,6 +19,19 @@ routes:
           - gradle-language-server/**
         planGlobs:
           - gradle-language-server/src/test/**/*.java
+        unitTestProof:
+          skill: unit-test-proof
+          workflow:
+            name: AutoTest Unit Test Proof
+            path: .github/workflows/autotest-unit-test-proof.yml
+          selectorFlag: --tests
+          inputs:
+            selector: test_selector
+            candidateSha: candidate_sha
+            phase: phase
+            executionId: execution_id
+          resultArtifactTemplate: autotest-unit-test-proof-{execution_id}
+          resultFile: result.json
         workflow:
           name: Build & Publish
           path: .github/workflows/main.yml

@@ -1,0 +1,207 @@
+name: AutoTest Unit Test Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact test-only commit to check out
+        required: true
+        type: string
+      test_selector:
+        description: One repository-approved Gradle test selector
+        required: true
+        type: string
+      phase:
+        description: Expected unit-test phase
+        required: true
+        default: red
+        type: choice
+        options:
+          - red
+          - green
+      execution_id:
+        description: Durable EvidenceRequest identifier
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  unit-test-proof:
+    name: Unit Test Proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 1
+
+      - name: Use Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+
+      - name: Configure Gradle wrapper downloads
+        shell: pwsh
+        run: |
+          $properties = "gradle/wrapper/gradle-wrapper.properties"
+          $content = Get-Content -Path $properties -Raw
+          $content = $content -replace 'https\\://services\.gradle\.org/distributions/', 'https\://downloads.gradle.org/distributions/'
+          $content = $content -replace 'https://services\.gradle\.org/distributions/', 'https://downloads.gradle.org/distributions/'
+          if ($content -match '(?m)^networkTimeout=') {
+            $content = $content -replace '(?m)^networkTimeout=.*$', 'networkTimeout=60000'
+          } else {
+            $content = $content.TrimEnd() + "`nnetworkTimeout=60000`n"
+          }
+          Set-Content -Path $properties -Value $content -NoNewline
+
+      - name: Run selected unit test
+        id: test
+        shell: bash
+        env:
+          TEST_SELECTOR: ${{ inputs.test_selector }}
+        run: |
+          set +e
+          ./gradlew gradle-language-server:test \
+            --tests "$TEST_SELECTOR" \
+            --no-daemon
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Classify unit-test result
+        shell: python
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          EXECUTION_ID: ${{ inputs.execution_id }}
+          EXIT_CODE: ${{ steps.test.outputs.exit_code }}
+          PHASE: ${{ inputs.phase }}
+          TEST_SELECTOR: ${{ inputs.test_selector }}
+        run: |
+          import glob
+          import json
+          import os
+          import platform
+          import subprocess
+          import xml.etree.ElementTree as ET
+
+          selector = os.environ["TEST_SELECTOR"]
+          class_name, method_name = selector.rsplit(".", 1)
+          reports = glob.glob(
+              "gradle-language-server/build/test-results/test/*.xml"
+          )
+          matching = []
+          parsed_tests = 0
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for case in root.iter("testcase"):
+                  parsed_tests += 1
+                  if (
+                      case.attrib.get("classname") == class_name
+                      and case.attrib.get("name", "").removesuffix("()")
+                      == method_name
+                  ):
+                      matching.append(case)
+
+          if len(matching) == 1:
+              failure = matching[0].find("failure")
+              failure_text = " ".join(
+                  (
+                      failure.attrib.get("type", ""),
+                      failure.attrib.get("message", ""),
+                      failure.text or "",
+                  )
+              ).casefold() if failure is not None else ""
+              failed = failure is not None and (
+                  "assert" in failure_text
+                  or "opentest4j" in failure_text
+              )
+              classification = (
+                  "expected_failure"
+                  if failed
+                  else (
+                      "test_passed"
+                      if failure is None
+                      and matching[0].find("error") is None
+                      else "unrelated_failure"
+                  )
+              )
+              test_outcome = (
+                  "failed"
+                  if failure is not None
+                  or matching[0].find("error") is not None
+                  else "passed"
+              )
+          elif reports and parsed_tests:
+              classification = "unrelated_failure"
+              test_outcome = "not_run"
+          else:
+              classification = "infrastructure_error"
+              test_outcome = "not_run"
+
+          checked_out_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"],
+              text=True,
+          ).strip()
+          java_version = subprocess.run(
+              ["java", "-version"],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          result = {
+              "schemaVersion": "v1",
+              "phase": os.environ["PHASE"],
+              "executionId": os.environ["EXECUTION_ID"],
+              "requestedSha": os.environ["CANDIDATE_SHA"],
+              "checkedOutSha": checked_out_sha,
+              "selector": selector,
+              "classification": classification,
+              "testOutcome": test_outcome,
+              "exitCode": int(os.environ["EXIT_CODE"]),
+              "runner": {
+                  "os": platform.platform(),
+                  "java": (
+                      java_version.stderr.strip()
+                      or java_version.stdout.strip()
+                  ),
+              },
+          }
+          with open("result.json", "w", encoding="utf-8") as output:
+              json.dump(result, output, sort_keys=True)
+
+      - name: Upload proof artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autotest-unit-test-proof-${{ inputs.execution_id }}
+          path: result.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce phase semantics
+        shell: python
+        env:
+          PHASE: ${{ inputs.phase }}
+        run: |
+          import json
+          import os
+          import sys
+
+          with open("result.json", encoding="utf-8") as source:
+              result = json.load(source)
+          expected = (
+              "expected_failure"
+              if os.environ["PHASE"] == "red"
+              else "test_passed"
+          )
+          if result["classification"] != expected:
+              print(
+                  "Expected classification "
+                  f"{expected}, observed {result['classification']}"
+              )
+              sys.exit(1)
