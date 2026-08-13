@@ -23,6 +23,16 @@ on:
         description: Durable EvidenceRequest identifier
         required: true
         type: string
+      result_contract_version:
+        description: Repository-owned result contract version
+        required: true
+        type: choice
+        options:
+          - v2
+      required_signals:
+        description: JSON array of PlanDraft expected-failure signals
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -81,14 +91,112 @@ jobs:
           EXECUTION_ID: ${{ inputs.execution_id }}
           EXIT_CODE: ${{ steps.test.outputs.exit_code }}
           PHASE: ${{ inputs.phase }}
+          REQUIRED_SIGNALS: ${{ inputs.required_signals }}
+          RESULT_CONTRACT_VERSION: ${{ inputs.result_contract_version }}
           TEST_SELECTOR: ${{ inputs.test_selector }}
         run: |
           import glob
+          import hashlib
           import json
           import os
           import platform
+          import re
           import subprocess
+          import unicodedata
           import xml.etree.ElementTree as ET
+
+          def normalize(value):
+              value = unicodedata.normalize("NFKC", value)
+              value = value.replace("\r\n", "\n").replace("\r", "\n")
+              return "\n".join(
+                  " ".join(line.split())
+                  for line in value.split("\n")
+                  if line.strip()
+              ).strip()
+
+          def signal_excerpt(content, signal):
+              normalized_signal = normalize(signal)
+              match = re.search(
+                  re.escape(normalized_signal),
+                  content,
+                  flags=re.IGNORECASE,
+              )
+              if match is None:
+                  return None
+              index = match.start()
+              signal_end = match.end()
+              start = max(0, index - 128)
+              end = min(len(content), start + 1024)
+              if end < signal_end:
+                  end = signal_end
+                  start = max(0, end - 1024)
+              return {
+                  "normalizedExcerpt": content[start:end],
+                  "sourceStart": start,
+                  "sourceEnd": end,
+              }
+
+          def failure_content_digest(
+              checked_out_sha,
+              testcase,
+              failure,
+          ):
+              payload = {
+                  "schemaVersion": "v2",
+                  "phase": os.environ["PHASE"],
+                  "executionId": os.environ["EXECUTION_ID"],
+                  "requestedSha": os.environ["CANDIDATE_SHA"],
+                  "checkedOutSha": checked_out_sha,
+                  "selector": os.environ["TEST_SELECTOR"],
+                  "testcase": testcase,
+                  "failure": {
+                      "kind": failure["kind"],
+                      "normalizedExcerpt": (
+                          failure["normalizedExcerpt"]
+                      ),
+                      "sourceContentDigest": (
+                          failure["sourceContentDigest"]
+                      ),
+                      "truncated": failure["truncated"],
+                      "matchedSignals": [
+                          {
+                              "signal": match["signal"],
+                              "normalizedExcerpt": (
+                                  match["normalizedExcerpt"]
+                              ),
+                              "sourceStart": match["sourceStart"],
+                              "sourceEnd": match["sourceEnd"],
+                          }
+                          for match in failure["matchedSignals"]
+                      ],
+                  },
+              }
+              return hashlib.sha256(
+                  json.dumps(
+                      payload,
+                      sort_keys=True,
+                      separators=(",", ":"),
+                      ensure_ascii=False,
+                  ).encode("utf-8")
+              ).hexdigest()
+
+          if os.environ["RESULT_CONTRACT_VERSION"] != "v2":
+              raise ValueError("Unsupported Unit Test Proof contract")
+          required_signals = json.loads(os.environ["REQUIRED_SIGNALS"])
+          if (
+              not isinstance(required_signals, list)
+              or not 1 <= len(required_signals) <= 16
+              or len(set(required_signals)) != len(required_signals)
+              or not all(
+                  isinstance(value, str)
+                  and value.strip()
+                  and len(value) <= 1024
+                  and len(normalize(value)) <= 1024
+                  and not any(char in value for char in "\x00\r\n")
+                  for value in required_signals
+              )
+          ):
+              raise ValueError("Invalid Unit Test Proof required signals")
 
           selector = os.environ["TEST_SELECTOR"]
           class_name, method_name = selector.rsplit(".", 1)
@@ -111,20 +219,57 @@ jobs:
                   ):
                       matching.append(case)
 
+          testcase = None
+          failure_result = None
           if len(matching) == 1:
+              testcase = {
+                  "className": matching[0].attrib.get("classname", ""),
+                  "name": matching[0].attrib.get("name", ""),
+              }
               failure = matching[0].find("failure")
               error = matching[0].find("error")
-              failed = failure is not None or error is not None
-              classification = (
-                  "expected_failure"
-                  if failed
-                  else "test_passed"
-              )
-              test_outcome = (
-                  "failed"
-                  if failed
-                  else "passed"
-              )
+              failure_element = failure if failure is not None else error
+              if failure_element is not None:
+                  content = normalize(
+                      "\n".join(
+                          (
+                              failure_element.attrib.get("message", ""),
+                              failure_element.attrib.get("type", ""),
+                              failure_element.text or "",
+                          )
+                      )
+                  )
+                  source_content_digest = hashlib.sha256(
+                      content.encode("utf-8")
+                  ).hexdigest()
+                  matched_signals = []
+                  for signal in required_signals:
+                      excerpt = signal_excerpt(content, signal)
+                      if excerpt is not None:
+                          matched_signals.append(
+                              {
+                                  "signal": signal,
+                                  **excerpt,
+                              }
+                          )
+                  failure_result = {
+                      "kind": (
+                          "failure" if failure is not None else "error"
+                      ),
+                      "normalizedExcerpt": content[:4096],
+                      "sourceContentDigest": source_content_digest,
+                      "truncated": len(content) > 4096,
+                      "matchedSignals": matched_signals,
+                  }
+                  classification = (
+                      "expected_failure"
+                      if len(matched_signals) == len(required_signals)
+                      else "failure_signal_mismatch"
+                  )
+                  test_outcome = "failed"
+              else:
+                  classification = "test_passed"
+                  test_outcome = "passed"
           elif reports and parsed_tests:
               classification = "unrelated_failure"
               test_outcome = "not_run"
@@ -136,6 +281,15 @@ jobs:
               ["git", "rev-parse", "HEAD"],
               text=True,
           ).strip()
+          if failure_result is not None:
+              content_digest = failure_content_digest(
+                  checked_out_sha,
+                  testcase,
+                  failure_result,
+              )
+              failure_result["contentDigest"] = content_digest
+              for match in failure_result["matchedSignals"]:
+                  match["contentDigest"] = content_digest
           java_version = subprocess.run(
               ["java", "-version"],
               capture_output=True,
@@ -143,7 +297,7 @@ jobs:
               check=False,
           )
           result = {
-              "schemaVersion": "v1",
+              "schemaVersion": "v2",
               "phase": os.environ["PHASE"],
               "executionId": os.environ["EXECUTION_ID"],
               "requestedSha": os.environ["CANDIDATE_SHA"],
@@ -152,6 +306,9 @@ jobs:
               "classification": classification,
               "testOutcome": test_outcome,
               "exitCode": int(os.environ["EXIT_CODE"]),
+              "requiredSignals": required_signals,
+              "testcase": testcase,
+              "failure": failure_result,
               "runner": {
                   "os": platform.platform(),
                   "java": (
