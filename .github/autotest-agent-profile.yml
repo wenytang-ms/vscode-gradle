@@ -21,6 +21,7 @@ routes:
           - gradle-language-server/src/test/**/*.java
         unitTestProof:
           skill: unit-test-proof
+          resultContractVersion: v2
           workflow:
             name: AutoTest Unit Test Proof
             path: .github/workflows/autotest-unit-test-proof.yml
@@ -30,6 +31,8 @@ routes:
             candidateSha: candidate_sha
             phase: phase
             executionId: execution_id
+            resultContractVersion: result_contract_version
+            requiredSignals: required_signals
           resultArtifactTemplate: autotest-unit-test-proof-{execution_id}
           resultFile: result.json
         workflow:
