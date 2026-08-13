@@ -7,11 +7,14 @@ import com.google.common.base.Charsets;
 import com.google.common.io.Files;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import java.io.DataOutputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.jar.JarEntry;
+import java.util.jar.JarOutputStream;
 import org.eclipse.lsp4j.Diagnostic;
 import org.eclipse.lsp4j.DiagnosticSeverity;
 import org.eclipse.lsp4j.DidOpenTextDocumentParams;
@@ -143,5 +146,65 @@ public class GradleDiagnosticsTest {
 			return;
 		}
 		Assertions.fail("Can't get corresponding diagnostics for the test file.");
+	}
+
+	@Test
+	public void testResolveJdk25ClasspathDiagnostics() throws Exception {
+		Path filePath = classpathTestPath.resolve("build.gradle").normalize();
+		String content = Files.asCharSource(filePath.toFile(), Charsets.UTF_8).read();
+		String uri = filePath.toUri().toString();
+		TextDocumentItem textDocumentItem = new TextDocumentItem(uri, GradleTestConstants.LANGUAGE_GRADLE, 1, content);
+		Path classpath = createJdk25Classpath();
+		ExecuteCommandParams params = new ExecuteCommandParams();
+		params.setCommand("gradle.setScriptClasspaths");
+		List<Object> arguments = new ArrayList<>();
+		Gson gson = new GsonBuilder().create();
+		String projectPath = classpathTestPath.normalize().toString();
+		String[] scriptClasspaths = {classpath.toString()};
+		arguments.add(gson.toJsonTree(projectPath, String.class));
+		arguments.add(gson.toJsonTree(scriptClasspaths, String[].class));
+		params.setArguments(arguments);
+		services.executeCommand(params);
+		services.didOpen(new DidOpenTextDocumentParams(textDocumentItem));
+		for (PublishDiagnosticsParams param : this.diagnosticsStorage) {
+			String paramUri = param.getUri();
+			if (!paramUri.equals(uri)) {
+				continue;
+			}
+			List<Diagnostic> diagnostics = param.getDiagnostics();
+			Assertions.assertEquals(0, diagnostics.size());
+			return;
+		}
+		Assertions.fail("Can't get corresponding diagnostics for the test file.");
+	}
+
+	private Path createJdk25Classpath() throws Exception {
+		Path classpath = java.nio.file.Files.createTempFile("classpath-jdk25-", ".jar");
+		classpath.toFile().deleteOnExit();
+		try (JarOutputStream output = new JarOutputStream(java.nio.file.Files.newOutputStream(classpath))) {
+			output.putNextEntry(new JarEntry("org/microsoft/gradle/test/ClasspathType.class"));
+			DataOutputStream classFile = new DataOutputStream(output);
+			classFile.writeInt(0xCAFEBABE);
+			classFile.writeShort(0);
+			classFile.writeShort(69);
+			classFile.writeShort(5);
+			classFile.writeByte(7);
+			classFile.writeShort(2);
+			classFile.writeByte(1);
+			classFile.writeUTF("org/microsoft/gradle/test/ClasspathType");
+			classFile.writeByte(7);
+			classFile.writeShort(4);
+			classFile.writeByte(1);
+			classFile.writeUTF("java/lang/Object");
+			classFile.writeShort(0x0021);
+			classFile.writeShort(1);
+			classFile.writeShort(3);
+			classFile.writeShort(0);
+			classFile.writeShort(0);
+			classFile.writeShort(0);
+			classFile.writeShort(0);
+			output.closeEntry();
+		}
+		return classpath;
 	}
 }
