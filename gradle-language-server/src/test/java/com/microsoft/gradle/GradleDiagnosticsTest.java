@@ -7,6 +7,7 @@ import com.google.common.base.Charsets;
 import com.google.common.io.Files;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import java.io.DataOutputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -25,6 +26,7 @@ import org.eclipse.lsp4j.services.LanguageClient;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 public class GradleDiagnosticsTest {
 
@@ -34,6 +36,8 @@ public class GradleDiagnosticsTest {
 	private GradleServices services;
 	private Path testPath;
 	private Path classpathTestPath;
+	@TempDir
+	private Path temporaryDirectory;
 
 	@BeforeEach
 	void setup() {
@@ -140,6 +144,57 @@ public class GradleDiagnosticsTest {
 			}
 			List<Diagnostic> diagnostics = param.getDiagnostics();
 			Assertions.assertEquals(0, diagnostics.size());
+			return;
+		}
+		Assertions.fail("Can't get corresponding diagnostics for the test file.");
+	}
+
+	@Test
+	public void testResolveJdk25ClasspathDiagnostics() throws Exception {
+		Path classFile = temporaryDirectory.resolve("org/microsoft/gradle/test/ClasspathType.class");
+		java.nio.file.Files.createDirectories(classFile.getParent());
+		try (DataOutputStream output = new DataOutputStream(java.nio.file.Files.newOutputStream(classFile))) {
+			output.writeInt(0xCAFEBABE);
+			output.writeShort(0);
+			output.writeShort(69);
+			output.writeShort(5);
+			output.writeByte(1);
+			output.writeUTF("org/microsoft/gradle/test/ClasspathType");
+			output.writeByte(7);
+			output.writeShort(1);
+			output.writeByte(1);
+			output.writeUTF("java/lang/Object");
+			output.writeByte(7);
+			output.writeShort(3);
+			output.writeShort(0x0021);
+			output.writeShort(2);
+			output.writeShort(4);
+			output.writeShort(0);
+			output.writeShort(0);
+			output.writeShort(0);
+			output.writeShort(0);
+		}
+
+		Path filePath = classpathTestPath.resolve("build.gradle").normalize();
+		String content = Files.asCharSource(filePath.toFile(), Charsets.UTF_8).read();
+		String uri = filePath.toUri().toString();
+		TextDocumentItem textDocumentItem = new TextDocumentItem(uri, GradleTestConstants.LANGUAGE_GRADLE, 1, content);
+		ExecuteCommandParams params = new ExecuteCommandParams();
+		params.setCommand("gradle.setScriptClasspaths");
+		List<Object> arguments = new ArrayList<>();
+		Gson gson = new GsonBuilder().create();
+		String projectPath = classpathTestPath.normalize().toString();
+		String[] scriptClasspaths = {temporaryDirectory.normalize().toString()};
+		arguments.add(gson.toJsonTree(projectPath, String.class));
+		arguments.add(gson.toJsonTree(scriptClasspaths, String[].class));
+		params.setArguments(arguments);
+		services.executeCommand(params);
+		services.didOpen(new DidOpenTextDocumentParams(textDocumentItem));
+		for (PublishDiagnosticsParams param : this.diagnosticsStorage) {
+			if (!param.getUri().equals(uri)) {
+				continue;
+			}
+			Assertions.assertEquals(0, param.getDiagnostics().size());
 			return;
 		}
 		Assertions.fail("Can't get corresponding diagnostics for the test file.");
