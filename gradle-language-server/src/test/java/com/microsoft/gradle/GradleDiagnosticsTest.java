@@ -6,12 +6,15 @@ package com.microsoft.gradle;
 import com.google.common.base.Charsets;
 import com.google.common.io.Files;
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import java.net.URI;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import org.codehaus.groovy.control.CompilerConfiguration;
+import org.codehaus.groovy.control.ErrorCollector;
+import org.codehaus.groovy.control.messages.ExceptionMessage;
 import org.eclipse.lsp4j.Diagnostic;
 import org.eclipse.lsp4j.DiagnosticSeverity;
 import org.eclipse.lsp4j.DidOpenTextDocumentParams;
@@ -143,5 +146,20 @@ public class GradleDiagnosticsTest {
 			return;
 		}
 		Assertions.fail("Can't get corresponding diagnostics for the test file.");
+	}
+
+	@Test
+	public void testPublishJdk25CompilerDiagnostics() {
+		ErrorCollector collector = new ErrorCollector(new CompilerConfiguration());
+		collector.addErrorAndContinue(new ExceptionMessage(
+				new IllegalArgumentException("Unsupported class file major version 69"), false, null));
+
+		PublishDiagnosticsParams params = GradleServices
+				.generateDiagnostics(URI.create("file:///workspace/build.gradle"), collector)
+				.iterator().next();
+		Diagnostic diagnostic = params.getDiagnostics().get(0);
+		Assertions.assertEquals("file:///workspace/build.gradle", params.getUri());
+		Assertions.assertEquals("Unsupported class file major version 69", diagnostic.getMessage());
+		Assertions.assertEquals(new org.eclipse.lsp4j.Position(0, 0), diagnostic.getRange().getStart());
 	}
 }
