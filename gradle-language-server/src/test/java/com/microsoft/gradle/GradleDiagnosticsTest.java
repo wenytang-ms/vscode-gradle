@@ -23,6 +23,7 @@ import org.eclipse.lsp4j.ShowMessageRequestParams;
 import org.eclipse.lsp4j.TextDocumentItem;
 import org.eclipse.lsp4j.services.LanguageClient;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -70,6 +71,16 @@ public class GradleDiagnosticsTest {
 
 	@Test
 	public void testPublishSyntaxDiagnostics() throws Exception {
+		assertSyntaxDiagnostics();
+	}
+
+	@Test
+	public void testResolveJdk25ClasspathDiagnostics() throws Exception {
+		Assumptions.assumeTrue(Runtime.version().feature() >= 25);
+		testResolveClasspathDiagnostics();
+	}
+
+	private void assertSyntaxDiagnostics() throws Exception {
 		Path filePath = testPath.resolve("build.gradle").normalize();
 		String content = Files.asCharSource(filePath.toFile(), Charsets.UTF_8).read();
 		String uri = filePath.toUri().toString();
@@ -90,7 +101,6 @@ public class GradleDiagnosticsTest {
 		}
 		Assertions.fail("Can't get corresponding diagnostics for the test file.");
 	}
-
 	@Test
 	public void testPublishClasspathDiagnostics() throws Exception {
 		Path filePath = classpathTestPath.resolve("build.gradle").normalize();
