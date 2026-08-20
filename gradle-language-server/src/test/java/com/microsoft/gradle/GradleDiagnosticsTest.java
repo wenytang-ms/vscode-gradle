@@ -69,7 +69,7 @@ public class GradleDiagnosticsTest {
 	}
 
 	@Test
-	public void testPublishSyntaxDiagnostics() throws Exception {
+	public void testPublishSyntaxDiagnosticsForJava25() throws Exception {
 		Path filePath = testPath.resolve("build.gradle").normalize();
 		String content = Files.asCharSource(filePath.toFile(), Charsets.UTF_8).read();
 		String uri = filePath.toUri().toString();
@@ -90,7 +90,6 @@ public class GradleDiagnosticsTest {
 		}
 		Assertions.fail("Can't get corresponding diagnostics for the test file.");
 	}
-
 	@Test
 	public void testPublishClasspathDiagnostics() throws Exception {
 		Path filePath = classpathTestPath.resolve("build.gradle").normalize();
@@ -117,7 +116,7 @@ public class GradleDiagnosticsTest {
 	}
 
 	@Test
-	public void testResolveClasspathDiagnostics() throws Exception {
+	public void testResolveJdk25ClasspathDiagnostics() throws Exception {
 		Path filePath = classpathTestPath.resolve("build.gradle").normalize();
 		String content = Files.asCharSource(filePath.toFile(), Charsets.UTF_8).read();
 		String uri = filePath.toUri().toString();
