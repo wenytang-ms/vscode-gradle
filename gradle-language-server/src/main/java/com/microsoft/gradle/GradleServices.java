@@ -44,9 +44,9 @@ import org.codehaus.groovy.ast.stmt.Statement;
 import org.codehaus.groovy.control.CompilationFailedException;
 import org.codehaus.groovy.control.ErrorCollector;
 import org.codehaus.groovy.control.Phases;
+import org.codehaus.groovy.control.messages.ExceptionMessage;
 import org.codehaus.groovy.control.messages.Message;
 import org.codehaus.groovy.control.messages.SyntaxErrorMessage;
-import org.codehaus.groovy.syntax.SyntaxException;
 import org.eclipse.lsp4j.CompletionItem;
 import org.eclipse.lsp4j.CompletionList;
 import org.eclipse.lsp4j.CompletionParams;
@@ -179,7 +179,7 @@ public class GradleServices implements TextDocumentService, WorkspaceService, La
 			// Send empty diagnostic if there is no error
 			diagnostics.add(new PublishDiagnosticsParams(uri.toString(), Collections.emptyList()));
 		} catch (CompilationFailedException e) {
-			diagnostics = generateDiagnostics(unit.getErrorCollector());
+			diagnostics = generateDiagnostics(uri, unit.getErrorCollector());
 		}
 		for (PublishDiagnosticsParams diagnostic : diagnostics) {
 			client.publishDiagnostics(diagnostic);
@@ -195,27 +195,30 @@ public class GradleServices implements TextDocumentService, WorkspaceService, La
 			compile(uri, unit);
 		}
 	}
-
-	private Set<PublishDiagnosticsParams> generateDiagnostics(ErrorCollector collector) {
+	static Set<PublishDiagnosticsParams> generateDiagnostics(URI uri, ErrorCollector collector) {
 		// URI, List<Diagnostic>
 		Map<String, List<Diagnostic>> diagnosticsStorage = new HashMap<>();
 		for (Message error : collector.getErrors()) {
+			String diagnosticUri = uri.toString();
+			Range range = new Range(new Position(0, 0), new Position(0, 0));
+			String message;
 			if (error instanceof SyntaxErrorMessage) {
 				SyntaxException exp = ((SyntaxErrorMessage) error).getCause();
-				Range range = LSPUtils.toRange(exp);
-				Diagnostic diagnostic = new Diagnostic();
-				diagnostic.setRange(range);
-				diagnostic.setSeverity(DiagnosticSeverity.Error);
-				diagnostic.setMessage(exp.getMessage());
-				diagnostic.setSource("Gradle");
-				if (diagnosticsStorage.containsKey(exp.getSourceLocator())) {
-					diagnosticsStorage.get(exp.getSourceLocator()).add(diagnostic);
-				} else {
-					List<Diagnostic> diagnostics = new ArrayList<>();
-					diagnostics.add(diagnostic);
-					diagnosticsStorage.put(exp.getSourceLocator(), diagnostics);
-				}
+				range = LSPUtils.toRange(exp);
+				message = exp.getMessage();
+				diagnosticUri = exp.getSourceLocator();
+			} else if (error instanceof ExceptionMessage) {
+				Throwable cause = ((ExceptionMessage) error).getCause();
+				message = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+			} else {
+				continue;
 			}
+			Diagnostic diagnostic = new Diagnostic();
+			diagnostic.setRange(range);
+			diagnostic.setSeverity(DiagnosticSeverity.Error);
+			diagnostic.setMessage(message);
+			diagnostic.setSource("Gradle");
+			diagnosticsStorage.computeIfAbsent(diagnosticUri, key -> new ArrayList<>()).add(diagnostic);
 		}
 		Set<PublishDiagnosticsParams> diagnosticsParams = new HashSet<>();
 		for (Map.Entry<String, List<Diagnostic>> entry : diagnosticsStorage.entrySet()) {
