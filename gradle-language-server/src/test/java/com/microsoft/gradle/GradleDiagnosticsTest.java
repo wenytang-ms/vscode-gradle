@@ -144,4 +144,19 @@ public class GradleDiagnosticsTest {
 		}
 		Assertions.fail("Can't get corresponding diagnostics for the test file.");
 	}
+
+	@Test
+	public void testResolveJdk25ClasspathDiagnostics() {
+		String uri = testPath.resolve("jdk-types.gradle").normalize().toUri().toString();
+		TextDocumentItem textDocumentItem = new TextDocumentItem(uri, GradleTestConstants.LANGUAGE_GRADLE, 1,
+				"class JdkTypes { java.lang.String value }");
+		services.didOpen(new DidOpenTextDocumentParams(textDocumentItem));
+		for (PublishDiagnosticsParams param : this.diagnosticsStorage) {
+			if (param.getUri().equals(uri)) {
+				Assertions.assertEquals(0, param.getDiagnostics().size());
+				return;
+			}
+		}
+		Assertions.fail("Can't get corresponding diagnostics for the test file.");
+	}
 }
